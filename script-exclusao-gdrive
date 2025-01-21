@@ -1,0 +1,118 @@
+const webhookUrl = 'xxxxx'; // Substitua pela sua URL de webhook (googlechat)
+
+function checkForDeletedFiles() {
+const now = new Date();
+const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+const deletedFilesPersonalDrive = getDeletedFilesFromPersonalDrive(oneHourAgo);
+const deletedFilesSharedDrives = getDeletedFilesFromSharedDrives(oneHourAgo);
+
+const allDeletedFiles = [...deletedFilesPersonalDrive, ...deletedFilesSharedDrives];
+
+if (allDeletedFiles.length > 0) {
+sendNotificationToChat(allDeletedFiles);
+}
+}
+
+function getDeletedFilesFromPersonalDrive(sinceTime) {
+const deletedFiles = [];
+const pageSize = 100; // You can adjust this as needed
+
+const query = trashed = true and modifiedTime > '${sinceTime.toISOString()}';
+
+try {
+const filesInDrive = Drive.Files.list({
+q: query,
+corpora: 'user',
+fields: 'files(name, parents, lastModifyingUser/displayName)',
+supportsAllDrives: true,
+includeItemsFromAllDrives: true
+});
+
+if (filesInDrive.files) {
+  filesInDrive.files.forEach(file => {
+    const userName = file.lastModifyingUser ? file.lastModifyingUser.displayName : 'Unknown';
+    if (file.parents && file.parents.length > 0) {
+      // Get the ID of the first parent (drive)
+      const driveId = 'My Drive';
+      deletedFiles.push({ name: file.name, driveId: driveId, userName: userName });
+    } else {
+      // If the file doesn't have a parent, it might be in My Drive
+      deletedFiles.push({ name: file.name, driveId: 'My Drive', userName: userName });
+    }
+  });
+}
+} catch (error) {
+Logger.log(Error processing personal drive: ${error});
+}
+
+return deletedFiles;
+}
+
+function getDeletedFilesFromSharedDrives(sinceTime) {
+const deletedFiles = [];
+const pageSize = 100;
+
+const sharedDrives = Drive.Teamdrives.list({
+pageSize: pageSize,
+fields: "teamDrives(id, name)"
+});
+
+if (sharedDrives.teamDrives) {
+sharedDrives.teamDrives.forEach(drive => {
+const driveId = drive.id;
+const driveName = drive.name;
+
+  const query = `trashed = true and modifiedTime > '${sinceTime.toISOString()}'`;
+
+  try {
+    const filesInDrive = Drive.Files.list({
+      q: query,
+      corpora: 'drive',
+      driveId: driveId,
+      fields: 'files(name, lastModifyingUser/displayName)',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true
+    });
+
+    if (filesInDrive.files) {
+      filesInDrive.files.forEach(file => {
+        const userName = file.lastModifyingUser ? file.lastModifyingUser.displayName : 'Unknown';
+        deletedFiles.push({ name: file.name, driveId: driveName, userName: userName });
+      });
+    }
+  } catch (error) {
+    if (error.message && error.message.includes("Shared drive not found")) {
+      Logger.log(`Drive ${driveId} not found or no access.`);
+    } else {
+      Logger.log(`Error processing drive ${driveId}: ${error}`);
+    }
+  }
+});
+}
+
+return deletedFiles;
+}
+
+function sendNotificationToChat(deletedFiles) {
+let message = 'Arquivos deletados:\n';
+deletedFiles.forEach(file => {
+message += - ${file.name} (Drive: ${file.driveId}, Usuário: ${file.userName})\n;
+});
+
+const payload = JSON.stringify({ text: message });
+const options = {
+method: 'post',
+contentType: 'application/json',
+payload: payload
+};
+
+UrlFetchApp.fetch(webhookUrl, options);
+}
+
+function createHourlyTrigger() {
+ScriptApp.newTrigger('checkForDeletedFiles')
+.timeBased()
+.everyHours(1)
+.create();
+}
